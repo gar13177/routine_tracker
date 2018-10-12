@@ -820,5 +820,171 @@ This makes sense, because this endpoint only accepts POST requests. From the bro
 
 Let's pause here and commit our work.
 
+Now that we have a working user authentication system, let's create a simple "Blog Post" model in a new app called `posts`. I'm going to borrow code from [this Django Rest Framework tutorial](https://wsvincent.com/django-rest-framework-tutorial/). 
 
-Now that we have a working user authentication system, let's create a simple "Blog Post" model in a new app called `posts`.
+Create a `posts` app in our Django project through `docker exec` as we did before, add `posts` to `INSTALLED_APPS`, and link up the urls in `backend` with: 
+
+```python
+urlpatterns = [
+  ...
+  path('api/', include('posts.urls')),
+]
+```
+
+Now we can add the model: 
+
+```python
+from django.db import models
+
+class Post(models.Model):
+    title = models.CharField(max_length=50)
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.title
+```
+
+Next let's register this app with the Django admin: 
+
+```python
+from django.contrib import admin
+from . models import Post
+
+admin.site.register(Post)
+```
+
+Then add a serializer for this model by creating `serializers.py` in the `posts` folder: 
+
+```python
+from rest_framework import serializers
+from . import models
+
+
+class PostSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        fields = ('id', 'title', 'content', 'created_at', 'updated_at',)
+        model = models.Post
+
+```
+
+We will need to add `urls.py` to `posts` with the following: 
+
+```python
+from django.urls import path
+
+from . import views
+
+urlpatterns = [
+    path('', views.PostList.as_view()),
+    path('<int:pk>/', views.PostDetail.as_view()),
+]
+```
+
+Finally, we will add two views that we mapped to endpoints in the code above:
+
+```python
+from rest_framework import generics
+
+from .models import Post
+from .serializers import PostSerializer
+
+
+class PostList(generics.ListAPIView):
+    queryset = Post.objects.all()
+    serializer_class = PostSerializer
+
+
+class PostDetail(generics.RetrieveAPIView):
+    queryset = Post.objects.all()
+    serializer_class = PostSerializer
+```
+
+Now, let's add some Post objects in the Django admin. 
+
+Go back to the browsable api and visit `/api/posts/`. You should see the posts you created in admin. Now let's have a look at something. Earlier we set `REST_FRAMEWORK` in `settings.py`. Let's see what this does by removing session and basic authentication:
+
+```python
+REST_FRAMEWORK = {
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_jwt.authentication.JSONWebTokenAuthentication',
+        # 'rest_framework.authentication.SessionAuthentication',
+        # 'rest_framework.authentication.BasicAuthentication',
+    ),
+}
+```
+
+Before we start working on our frontend, let's write some tests to make sure that access to our posts is limited to requests that come with a valid token. 
+
+**posts/tests.py**
+
+```python
+from django.contrib.auth.models import User
+from django.test import TestCase
+from django.urls import reverse
+
+from rest_framework import status
+
+from rest_framework_jwt.settings import api_settings
+
+
+class TestPosts(TestCase):
+    """Post Tests"""
+
+    def test_get_posts(self):
+        """
+        Unauthenticated users should not be able to access posts via APIListView
+        """
+        url = reverse('posts')
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_header_for_token_verification(self):
+        """
+        https://stackoverflow.com/questions/47576635/django-rest-framework-jwt-unit-test
+        Tests that users can access posts with JWT tokens
+        """
+
+        jwt_payload_handler = api_settings.JWT_PAYLOAD_HANDLER
+        jwt_encode_handler = api_settings.JWT_ENCODE_HANDLER
+
+        user = User.objects.create_user(username='user', email='user@foo.com', password='pass')
+        user.is_active = True
+        user.save()
+        payload = jwt_payload_handler(user)
+        token = jwt_encode_handler(payload)
+
+
+        verify_url = reverse('api-jwt-verify')
+        credentials = {
+            'token': token
+        }
+
+        resp = self.client.post(verify_url, credentials, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+```
+
+You will see that you are logged out of the browsable API, and when you try to access the posts list, you will see the following:
+
+```
+HTTP 401 Unauthorized
+Allow: GET, HEAD, OPTIONS
+Content-Type: application/json
+Vary: Accept
+WWW-Authenticate: JWT realm="api"
+
+{
+    "detail": "Authentication credentials were not provided."
+}
+```
+
+We need to think about what default behavior we should set so that we don't have to repeat entering the same permission or authentication class for each view. 
+
+Since the only way we can authenticate is with JSON web tokens, we should now think about adding our frontend. This will allow us to make POST requests to the backend's authentication route from our frontin login form, save returned tokens in state and in local storage, and also send the token as a header with each outgoing request that can be used to grant permission for protected resources. We will get to this soon, but first we need to build our frontend. 
+
+At this point, we can say that the very basics of our backend app are complete. We can obtain tokens for accessing protected resources. Currently, we can't do much with these tokens other than incorporate them into our tests. Let's commit our changes and merge our `djangoapp` branch into our `develop` branch. 

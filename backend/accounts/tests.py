@@ -11,7 +11,6 @@ from django.contrib.auth.models import User
 class AccountsTests(APITestCase):
 
     def test_obtain_jwt(self):
-        print("hmm")
 
         url = reverse('api-jwt-auth')
         u = User.objects.create_user(username='user', email='user@foo.com', password='pass')
