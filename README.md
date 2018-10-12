@@ -339,3 +339,486 @@ Let's add the changes and commit them to our `djangoapp` branch.
 ```
 $ git add . && git commit -m "created django project and docker files, updated README"
 ```
+
+Next, we are going make a small change to our Django `settings.py` file. 
+
+In `backend/backend/settings.py`, remove the value of `DATABASES` and replace it with this: 
+
+```python
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'postgres',
+        'USER': 'postgres',
+        'HOST': 'db',
+        'PORT': 5432,
+    }
+}
+```
+
+These settings option tell Django how to connect to the postgres database. Notice that `'HOST': 'db'` refers to the `db` listed under `services` in our `docker-compose.yml` file. Now we are ready to start our two docker containers. This is where docker-compose comes in. The following command will start a Django server and a postgres container where our database will be running and ready to accept connections from our Django application.
+
+### docker-compose best practices
+
+At this point we should talk about best practices with docker compose. `docker-compose.yml` can be tricky to get the hang of at first. There are lots of special values that can change the behavior of how it starts containers, and *where* it looks for certain scripts and files needed to start a container. 
+
+Let's set a `context` value to something other than `.` (the current directory). `context` tells us where to look for the `Dockerfile`. I will try to organize our services by folders in the top level directory, and as a general rule, each top level folder should have it's own Dockerfile or Dockerfiles. 
+
+If we set `context` to `./backend`, then we need to move the Dockerfile to `backend`:
+
+```
+$ mv Dockerfile backend/
+```
+
+We should move `requirements.txt` to `backend` as well, since it is specific to our `backend` service that runs Django.
+
+```
+$ mv requirements.txt backend/
+```
+
+Also, before we run the development server (`runserver` command), we will want to make database migrations and run the `migrate` command. We could add this directly to `docker-compse.yml`, but this would clutter the file. We will be adding lots to this, so it is better to keep this file clean. 
+
+Instead of writing:
+
+```yml
+command: python3 manage.py makemigrations && python3 manage.py migrate && python3 manage.py runserver 0.0.0.0:8000
+```
+
+we can replace these chained commands with one shell script:
+
+```yml
+command: /start.sh
+```
+
+**start.sh**
+
+```bash
+#!/bin/bash
+
+cd backend
+python3 manage.py makemigrations
+python3 manage.py migrate --no-input
+python3 manage.py runserver 0.0.0.0:8000
+```
+
+We also need to make `start.sh` executable:
+
+```bash
+$ sudo chmod +x start.sh
+```
+
+Next, we need to move this file to our `backend`. Since we will probably be adding additional scripts to this folder for other functionality, let's create a `scripts` folder and move `start.sh` into that folder. 
+
+```
+.
+├── backend
+│   ├── backend
+│   │   ├── __init__.py
+│   │   ├── settings.py
+│   │   ├── urls.py
+│   │   └── wsgi.py
+│   ├── Dockerfile
+│   ├── manage.py
+│   ├── requirements.txt
+│   └── scripts
+│       └── start.sh
+├── docker-compose.yml
+└── README.md
+
+3 directories, 10 files
+```
+
+Next, we need to copy the script into the top level of our Docker container so it has access to the script. To do this, we can add the following line to the `backend` `Dockerfile`:
+
+```
+FROM python:3.6 
+ENV PYTHONUNBUFFERED 1
+RUN mkdir /code
+WORKDIR /code
+ADD requirements.txt /code/
+RUN pip install -r requirements.txt
+COPY scripts/start.sh /
+ADD . /code/
+```
+
+We added this line: `COPY scripts/start.sh /`. Since our `context` was set to `backend` in `docker-compose.yml`, we will have access to `scripts/start.sh` in the Docker container when it starts up. Now that we have carefully moved all of our files into place, we are ready to user `docker-compse up`. This command does nothing more than running multiple containers as specified by the `docker-compose.yml` file. Actually, it takes care of two other important docker concept: `networks` and `volumes`--we will get to these soon.
+
+By default, `docker-compose up` looks for a file named `docker-compose.yml` in the same directory that it uses to start containers.
+
+At this point, if we run `docker-compose up`, we get an error.
+
+```
+$ docker-compose up
+portal_db_1 is up-to-date
+Creating portal_web_1 ... error
+
+ERROR: for portal_web_1  Cannot start service web: OCI runtime create failed: container_linux.go:348: startingcontainer process caused "exec: \"/start.sh\": stat /start.sh: no such file or directory": unknown
+
+ERROR: for web  Cannot start service web: OCI runtime create failed: container_linux.go:348: starting container process caused "exec: \"/start.sh\": stat /start.sh: no such file or directory": unknown
+ERROR: Encountered errors while bringing up the project.
+```
+
+Since we changed the Dockerfile, we need to rebuild the docker container so that it includes our `start.sh` script, so we simple run the command with `--build`:
+
+```
+$ docker-compose up --build
+Creating network "portal_default" with the default driver
+Building web
+Step 1/8 : FROM python:3.6
+ ---> 0c4b4dbe1e58
+Step 2/8 : ENV PYTHONUNBUFFERED 1
+ ---> Using cache
+ ---> 8ad1f5d92a16
+Step 3/8 : RUN mkdir /code
+ ---> Using cache
+ ---> 1a69a4a0d9c2
+Step 4/8 : WORKDIR /code
+ ---> Using cache
+ ---> 6ba28dd645f4
+Step 5/8 : ADD requirements.txt /code/
+ ---> Using cache
+ ---> e5a958a4e669
+Step 6/8 : RUN pip install -r requirements.txt
+ ---> Using cache
+ ---> 3ea3049488af
+Step 7/8 : COPY scripts/start.sh /
+ ---> Using cache
+ ---> f2a3a578f135
+Step 8/8 : ADD . /code/
+ ---> Using cache
+ ---> 2598309c4c69
+Successfully built 2598309c4c69
+Successfully tagged portal_web:latest
+Recreating portal_db_1 ... done
+Recreating portal_web_1 ... done
+Attaching to portal_db_1, portal_web_1
+db_1   | 2018-10-11 23:54:21.401 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+db_1   | 2018-10-11 23:54:21.401 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+db_1   | 2018-10-11 23:54:21.408 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+db_1   | 2018-10-11 23:54:21.446 UTC [25] LOG:  database system was shut down at 2018-10-11 23:54:18 UTC
+db_1   | 2018-10-11 23:54:21.454 UTC [1] LOG:  database system is ready to accept connections
+web_1  | /usr/local/lib/python3.6/site-packages/psycopg2/__init__.py:144: UserWarning: The psycopg2 wheel package will be renamed from release 2.8; in order to keep installing from binary please use "pip install psycopg2-binary" instead. For details see: <http://initd.org/psycopg/docs/install.html#binary-install-from-pypi>.
+web_1  |   """)
+web_1  | No changes detected
+web_1  | /usr/local/lib/python3.6/site-packages/psycopg2/__init__.py:144: UserWarning: The psycopg2 wheel package will be renamed from release 2.8; in order to keep installing from binary please use "pip install psycopg2-binary" instead. For details see: <http://initd.org/psycopg/docs/install.html#binary-install-from-pypi>.
+web_1  |   """)
+web_1  | Operations to perform:
+web_1  |   Apply all migrations: admin, auth, contenttypes, sessions
+web_1  | Running migrations:
+web_1  |   No migrations to apply.
+web_1  | /usr/local/lib/python3.6/site-packages/psycopg2/__init__.py:144: UserWarning: The psycopg2 wheel package will be renamed from release 2.8; in order to keep installing from binary please use "pip install psycopg2-binary" instead. For details see: <http://initd.org/psycopg/docs/install.html#binary-install-from-pypi>.
+web_1  |   """)
+web_1  | /usr/local/lib/python3.6/site-packages/psycopg2/__init__.py:144: UserWarning: The psycopg2 wheel package will be renamed from release 2.8; in order to keep installing from binary please use "pip install psycopg2-binary" instead. For details see: <http://initd.org/psycopg/docs/install.html#binary-install-from-pypi>.
+web_1  |   """)
+web_1  | Performing system checks...
+web_1  | 
+web_1  | System check identified no issues (0 silenced).
+web_1  | October 11, 2018 - 23:54:22
+web_1  | Django version 2.1.2, using settings 'backend.settings'
+web_1  | Starting development server at http://0.0.0.0:8000/
+web_1  | Quit the server with CONTROL-C.
+```
+
+If you run `git status`, you will see some additional `.pyc` files generated by docker. Let's add a `.gitignore` file to keep these out of our source control:
+
+**.gitignore**
+
+```
+__pycache__/
+```
+
+You might have noticed that there are several errors in the `web_1` output related to `psycopg2`, the Python package that helps us work with Postgres databases. Let's add `psycopg2-binary` to our `requirements.txt` file in order to get rid of this message. We can get rid of the `psycopg2` package and add the `psycopg2-binary` package in its place.
+
+```
+$ docker-compose up --build
+Building web
+Step 1/8 : FROM python:3.6
+ ---> 0c4b4dbe1e58
+Step 2/8 : ENV PYTHONUNBUFFERED 1 ---> Using cache ---> 8ad1f5d92a16
+Step 3/8 : RUN mkdir /code
+ ---> Using cache ---> 1a69a4a0d9c2Step 4/8 : WORKDIR /code
+ ---> Using cache
+ ---> 6ba28dd645f4
+Step 5/8 : ADD requirements.txt /code/
+ ---> 1748c46dd9ff
+Step 6/8 : RUN pip install -r requirements.txt
+ ---> Running in 2dfe4414a858
+Collecting Django (from -r requirements.txt (line 1))
+  Downloading https://files.pythonhosted.org/packages/32/ab/22530cc1b2114e6067eece94a333d6c749fa1c56a009f0721e51c181ea53/Django-2.1.2-py3-none-any.whl (7.3MB)
+Collecting psycopg2-binary (from -r requirements.txt (line 2))
+  Downloading https://files.pythonhosted.org/packages/3f/4e/b9a5cb7c7451029f67f93426cbb5f5bebedc3f9a8b0a470de7d0d7883602/psycopg2_binary-2.7.5-cp36-cp36m-manylinux1_x86_64.whl (2.7MB)
+Collecting pytz (from Django->-r requirements.txt (line 1))
+  Downloading https://files.pythonhosted.org/packages/30/4e/27c34b62430286c6d59177a0842ed90dc789ce5d1ed740887653b898779a/pytz-2018.5-py2.py3-none-any.whl (510kB)
+Installing collected packages: pytz, Django, psycopg2-binary
+Successfully installed Django-2.1.2 psycopg2-binary-2.7.5 pytz-2018.5
+Removing intermediate container 2dfe4414a858
+ ---> b51cf06f0ad6
+Step 7/8 : COPY scripts/start.sh /
+ ---> a25ed75c1a84
+Step 8/8 : ADD . /code/
+ ---> bd3c2782c9c9
+Successfully built bd3c2782c9c9
+Successfully tagged portal_web:latest
+Starting portal_db_1 ... done
+Recreating portal_web_1 ... done
+Attaching to portal_db_1, portal_web_1
+db_1   | 2018-10-12 00:06:38.906 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+db_1   | 2018-10-12 00:06:38.906 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+db_1   | 2018-10-12 00:06:38.916 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+db_1   | 2018-10-12 00:06:38.933 UTC [24] LOG:  database system was shut down at 2018-10-12 00:06:19 UTC
+db_1   | 2018-10-12 00:06:38.938 UTC [1] LOG:  database system is ready to accept connections
+web_1  | No changes detected
+web_1  | Operations to perform:
+web_1  |   Apply all migrations: admin, auth, contenttypes, sessions
+web_1  | Running migrations:
+web_1  |   No migrations to apply.
+web_1  | Performing system checks...
+web_1  |
+web_1  | System check identified no issues (0 silenced).
+web_1  | October 12, 2018 - 00:06:40
+web_1  | Django version 2.1.2, using settings 'backend.settings'
+web_1  | Starting development server at http://0.0.0.0:8000/
+web_1  | Quit the server with CONTROL-C.
+```
+
+Notice that the warnings about `psycopg2` are gone. 
+
+Now, let's visit `http://0.0.0.0:8000/` to see our dockerized Django app in action. We see an error:
+
+> Invalid HTTP_HOST header: '0.0.0.0:8000'. You may need to add '0.0.0.0' to ALLOWED_HOSTS.
+
+Let's set a value for `ALLOWED_HOSTS` in `settings.py`:
+
+```python
+
+ALLOWED_HOSTS = ['*']
+
+```
+
+Now, notice that we don't need to rebuild our containers. Simply save `settings.py` with the new `ALLOWED_HOSTS` value, and we will be able to access our application. 
+
+This brings us to the concept of volumes. You might not have noticed, but our `docker-compose.yml` file uses a volume:
+
+```yml
+    volumes:
+      - .:/code
+```
+
+This mounts our backend folder into the `/code` directory inside of our container. Let's demonstrate this by learning another helpful trick when working with containers: shelling into a running container. 
+
+```
+$ docker ps
+CONTAINER ID        IMAGE               COMMAND                  CREATED             STATUS              PORTS                   NAMES
+4bfe8f88161b        portal_web          "/start.sh"              10 minutes ago      Up 5 minutes        0.0.0.0:8000->8000/tcp   portal_web_1
+95d3e821164d        postgres            "docker-entrypoint.s…"   23 minutes ago      Up 5 minutes        5432/tcp                 portal_db_1
+```
+
+Now, if we take the `CONTAINER ID` of `portal_web`, the Django container, we can access this container with the following command: 
+
+```
+$ docker exec -it 4bfe8f88161b /bin/bash
+root@4bfe8f88161b:/code#
+```
+
+We can see that we are in the `/code` directory. Let's see what files we have here:
+
+```
+root@4bfe8f88161b:/code# ls -al
+total 48
+drwxrwxr-x 4 1000 1000  4096 Oct 12 00:00 .
+drwxr-xr-x 1 root root  4096 Oct 12 00:06 ..
+drwxrwxr-x 8 1000 1000  4096 Oct 12 00:20 .git
+-rw-rw-r-- 1 1000 1000    12 Oct 12 00:00 .gitignore
+-rw-rw-r-- 1 1000 1000 23757 Oct 12 00:20 README.md
+drwxr-xr-x 4 1000 1000  4096 Oct 11 23:07 backend
+-rw-rw-r-- 1 1000 1000   188 Oct 11 23:54 docker-compose.yml
+```
+
+We are inside of our container in a folder called `/code`, a top level folder, and it contains our entire project directory. 
+
+This is why our `start.sh` script first changes directory to `backend` before running the `runserver` command.
+
+We could rearrange this if we wanted so that we are only mounting our `backend` into the volume. This depends on what code you need access to on a per-container basis. This is also why `docker-compose.yml` lives in the root of our project and the various docker files for containers can live elsewhere. 
+
+Since the code was mounted from our local machine into the container, the changes we make on the files in our local machine are also made inside of the container, so our Django app refreshes when we save our code. 
+
+While we are in the container, let's create a superuser that we can use to login to Django admin.
+
+## Django ReST Framework
+
+At this point, we are going to add some additional packages to Django that will allow us to build a powerful API. The [Django ReST Framework](https://www.django-rest-framework.org/) will be responsible for serializing and deserializing our Django models instances to and from JSON. It has many powerful fetures that make it the most popular package for building APIs with Django. 
+
+In addition to the Django ReST Framework, we will install another package for using JSON Web Tokens for authentication and permission control. This package is called [`djangorestframework_jwt`](https://github.com/GetBlimp/django-rest-framework-jwt) and it is maintained by a company called [Blimp](https://github.com/GetBlimp). 
+
+First let's add the packages to the end of `requirements.txt`:
+
+```python
+djangorestframework
+django-filter
+djangorestframework-jwt
+```
+
+Next, we will need to add the following to `INSTALLED_APPS`:
+
+```python
+
+    'rest_framework',
+
+```
+
+Then we can add the following to `settings.py` after `DATABASES`:
+
+```python
+REST_FRAMEWORK = {
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_jwt.authentication.JSONWebTokenAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+        'rest_framework.authentication.BasicAuthentication',
+    ),
+}
+```
+
+We have a little bit more work to do on the backend. Once we build out an authentiction system and a basic model like "Blog Posts", we will be ready to set up a front end that will get and post data to our backend Django API. Then we will tie the backend and the frontend together with a powerful webserver and reverse proxy: NGINX.
+
+First, we need a new Django app to organize our project users. Let's create a new app called `accounts`. We will need to issue a `startapp` command from inside of our Django container, change permissions on those files, and then add the name of the app to `INSTALLED_APPS` so our project becomes aware of it. We will also need to create API endpoints. Let's do this all step-by-step.
+
+First, let's make the app:
+
+```
+$ docker exec -it portal_web_1 /bin/bash
+root@559e1087027f:/code# cd backend/
+root@559e1087027f:/code/backend# ./manage.py startapp accounts
+root@559e1087027f:/code/backend#
+```
+
+Set permissions on the files in the `accounts` app: 
+
+```
+$ sudo chown -R $USER:$USER .
+[sudo] password for brian:
+$
+```
+
+Now let's hook up our `accounts` app to the rest of our Django project. Add `'accounts'` to `INSTALLED_APPS` and add the following to the `urls.py` file in `backend`:
+
+```python
+from django.contrib import admin
+from django.urls import path, include
+
+urlpatterns = [
+    path('', include('accounts.urls')),
+    path('admin/', admin.site.urls),
+]
+```
+
+Add `urls.py` to `accounts` and add the following: 
+
+Now, to the `urls.py` file in the `accounts` app, add the following: 
+
+```python
+from django.urls import path, re_path
+from rest_framework_jwt.views import obtain_jwt_token, refresh_jwt_token, verify_jwt_token
+
+urlpatterns = [
+    re_path(r'^auth/obtain_token/', obtain_jwt_token, name='api-jwt-auth'),
+    re_path(r'^auth/refresh_token/', refresh_jwt_token, name='api-jwt-refresh'),
+    re_path(r'^auth/verify_token/', verify_jwt_token, name='api-jwt-verify'),
+]
+```
+
+The first route will return a JSON response containing a special token when we send a POST request with the correct `username` and `password`. Actually, `djangorestframework_jwt` supports `AbstractBaseUser`, so we should be able to authenticate with any combination of credentials, but we will only be looking at the standard user model for now. 
+
+Let's write a test to see how this works in action. In `accounts/tests.py`, write the following:
+
+```python
+from django.test import TestCase
+
+# Create your tests here.
+from django.urls import reverse
+from rest_framework.test import APITestCase
+from rest_framework import status
+
+
+from django.contrib.auth.models import User
+
+class AccountsTests(APITestCase):
+
+    def test_obtain_jwt(self):
+
+        # create an inactive user
+        url = reverse('api-jwt-auth')
+        u = User.objects.create_user(username='user', email='user@foo.com', password='pass')
+        u.is_active = False
+        u.save()
+
+        # authenticate with username and password
+        resp = self.client.post(url, {'email':'user@foo.com', 'password':'pass'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        
+        # set the user to activate and attempt to get a token from login
+        u.is_active = True
+        u.save()
+        resp = self.client.post(url, {'username':'user', 'password':'pass'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertTrue('token' in resp.data)
+        token = resp.data['token']
+
+        # print the token
+        print(token)
+```
+
+We can run this test like this: 
+
+```
+$ docker exec -it portal_web_1 /bin/bash
+root@559e1087027f:/code# cd backend/
+root@559e1087027f:/code/backend# ./manage.py test
+Creating test database for alias 'default'...
+System check identified no issues (0 silenced).
+eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoxLCJ1c2VybmFtZSI6InVzZXIiLCJleHAiOjE1MzkzMTE4ODAsImVtYWlsIjoidXNlckBmb28uY29tIn0.cPO-FOEqEdQh05Y2UpU7ec3OlSX16kU8EvkgtlcdU58
+.
+----------------------------------------------------------------------
+Ran 1 test in 0.177s
+
+OK
+Destroying test database for alias 'default'...
+root@559e1087027f:/code/backend#
+```
+
+Our test passes, and we can see the JWT printed out at the end of the test. Here's a JWT, decoded:
+
+```json
+eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoyLCJ1c2VybmFtZSI6ImFkbWluIiwiZXhwIjoxNTM4MzMwNTk5LCJlbWFpbCI6IiJ9.rIHFjBmbqBHnqKwCNlHenImMtQSmzFkbGLA8pddQ6AY
+```
+
+and then decode it using base64:
+
+
+```json
+{"typ":"JWT","alg":"HS256"}{"user_id":2,"username":"admin","exp":1538330599,"email":""}Ō稬6QޜY<P
+```
+
+The first part of JSON identifies the type of token and the hashing algorithm used. The second part is a JSON representation of the authenticated user, with additional information about when the token expires. The third part is a signature that uses the `SECRET_KEY` of our Django application for security.
+
+We can also try this enpoint in the Django ReST Framework's browseable API by going to `http://0.0.0.0:8000/auth/obtain_token/`. You will see this:
+
+```
+HTTP 405 Method Not Allowed
+Allow: POST, OPTIONS
+Content-Type: application/json
+Vary: Accept
+
+{
+    "detail": "Method \"GET\" not allowed."
+}
+```
+
+This makes sense, because this endpoint only accepts POST requests. From the browseable API, we can make a POST request using our superuser account. 
+
+Let's pause here and commit our work.
+
+
+Now that we have a working user authentication system, let's create a simple "Blog Post" model in a new app called `posts`.
