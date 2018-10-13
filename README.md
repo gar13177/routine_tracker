@@ -1880,3 +1880,4 @@ no changes added to commit (use "git add" and/or "git commit -a")
 $ git add .
 $ git commit -m "completed development environemnt: added nginx, connected frontend and backend, fixed static files"
 ```
+
