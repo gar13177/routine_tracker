@@ -1084,3 +1084,799 @@ $ rm Dockerfile
 $ git add .
 $ git commit -m "added VueJS project in frontend"
 ```
+
+## `docker-compose.dev.yml`
+
+Since we will be splitting out our `docker-compose.yml` file into a development and production verion (and even more versions later on), let's copy it into `docker-comppse.dev.yml`:
+
+```
+$ cp docker-compose.yml docker-compose.dev.yml
+```
+
+Our `docker-compose.dev.yml` file currently has two services in it: `db` and `backend`. `db` is the service that runs our Postgres database, and `backend` is the service that runs our Django application. We will need to introduce two new services: `frontend` and `nginx`. Also, we will introduce two [networks](https://docs.docker.com/network/) that will help our service communicate automatically through the docker engine. 
+
+### Networks
+
+There are several types of networks that docker supports, but we will use one called "user-defined bridge networks". 
+
+> User-defined bridge networks are best when you need multiple containers to communicate on the same Docker host. We will add these to `docker-compose.dev.yml` after we add the `frontend` and `nginx` services. 
+
+### `frontend`
+
+`frontend` will use a `node` base image and it will run `npm run serve` so that we can watch for changes to files in our project and see the result instantly. 
+
+Here's what the service will look like in `docker-compose.dev.yml`:
+
+```yml
+  frontend:
+    build:
+      context: ./frontend
+    volumes:
+      - ./frontend:/app/frontend:ro
+    networks:
+      - nginx_network
+    depends_on:
+      - backend
+      - db
+```
+
+For this service, we will be looking for a `Dockerfile` in `frontend`. We know this from the `build/context` part of the service definition:
+
+```yml
+    build:
+      context: ./frontend
+```
+
+Let's create this `Dockerfile`, and then continue looking at the `frontend` service in `docker-compose.dev.yml`. 
+
+### `frontend` Dockerfile
+
+```
+FROM node:9.11.1-alpine
+
+# make the 'app' folder the current working directory
+WORKDIR /app/
+
+COPY package.json ./
+
+# install project dependencies
+RUN npm install
+
+# copy project files and folders to the current working directory (i.e. 'app' folder)
+COPY . .
+
+WORKDIR /app/frontend
+
+EXPOSE 8080
+
+CMD ["npm", "run", "serve"]
+```
+
+This Dockerfile says: 
+
+- Use the base image of `node:9.11.1-alpine`,
+- In the container, create a folder in the root of the filesystem called `/app` and move into this directory
+- Copy `package.json` from our local machine into `/app` (not `/`) in the container,
+- Install the dependencies into `node_modules`,
+- Copy over all of the files from our project to `.`, which is `/app` since we set that as `WORKDIR`,
+- Change into the folder `/app/frontend`,
+- Expose port `8080` in our container
+- Run `npm run serve` in the container
+
+Let's continue looking at `docker-compose.dev.yml`. After the `build` section, we see that we are mounting the `frontend` directory from our local machine into `/app/frontend`. `ro` specifies that the mounted volume is read-only. This is fine since we will be editing the files in this volume from our local machine, not from inside of the docker container. 
+
+Next, we see that the service definition for `frontend` lists `nginx_network` under networks. This means that the service shares a network with other services that are also on `nginx_network`. We will see why this is the case soon. 
+
+`depends_on` lists the services that must be started before the services `depends_on` is listed under starts. 
+
+Now let's look at NGINX. NGINX is a webserver and reverse proxy that will play an important role in our application. NGINX is analogous to the "front desk" in that it directs traffic to the files or service URLs that specifies. If you are familiar with Django's URL routing, I think it is fair to say that NGINX is like a higher-level version of `urls.py` in that it directs traffic based on the properties of the incoming URLs.
+
+```
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8000:80"
+    depends_on:
+      - backend
+    volumes:
+      - ./nginx/dev.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - nginx_network
+      - backend_network
+```
+
+In this service we don't include `build` in the definition because we aren't modifying the base image, `nginx:alpine` in this case. Because we are not modifying it, we can simply include `nginx:alpine`. Since we aren't specifying a URL, the docker engine defaults to `docker.io` to look for these images. `docker.io` is a private company that maintains a registry of base images that can be used for literally anything. Have a look at the Docker (big D) Hub to see what kinds of things people and companies are doing with docker. 
+
+Next we specify ports. We want to map port `8000` on our local machine to port `80` of this container. This means that when we type `localhost:8000` on our local machine, our requests goes to port `80` of the NGINX container which will be listening on this port, and accordingly directing traffic to the destination specified in its configuration file. 
+
+Next we see that `dev.conf` is mounted to `/etc/nginx/nginx.conf`. Let's talk about this after we talk about networks.
+
+We see that this port is on the `nginx_network` and the `backend_network`. This is important because we will be making requests to both the `backend` API Django service which is on the `backend_network` and also the `frontend` service that will make request to the `nginx_network`, the service that is running our development server for VueJS on node. 
+
+> The network configuration will change slightly for production, we will see how when we return to `docker-compose.yml`.
+
+Let's come back to the volumes. This section of the service definition says that `nginx/dev.conf` will be mounted to `/etc/nginx/nginx.conf`. What this is doing is allowing us to place our NGINX configuration file inside of the container in a file that NGINX usually looks to for its configuration (`/etc/nginx/nginx.conf`).
+
+Now that we are done analyzing the NGINX service definition, let's look at `nginx.dev.conf`. This is the NGINX configuration file that we will use for our development environment. But first, let's create this folder and file:
+
+```
+$ mkdir nginx && cat <<EOF > nginx/dev.conf
+user  nginx;
+worker_processes  1;
+
+events {
+  worker_connections  1024;
+}
+
+http {
+  include /etc/nginx/mime.types;
+  client_max_body_size 100m;
+
+  upstream backend {
+    server backend:8000;
+  }
+
+  upstream frontend {
+    server frontend:8080;
+  }
+
+
+  server {
+    listen 80;
+    charset utf-8;
+
+    # frontend urls
+    location / {
+    proxy_redirect off;
+    proxy_pass http://frontend;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Host $http_host;
+    }
+
+    # frontend dev-server
+    location /sockjs-node {
+      proxy_redirect off;
+      proxy_pass http://frontend;
+      proxy_set_header X-Real-IP  $remote_addr;
+      proxy_set_header X-Forwarded-For $remote_addr;
+      proxy_set_header Host $host;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+    }
+
+    # backend urls
+    location ~ ^/(admin|api) {
+      proxy_redirect off;
+      proxy_pass http://backend;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header Host $http_host;
+    }
+
+    # backend static
+    location ~ ^/(staticfiles|media)/(.*)$ {
+      alias /$1/$2;
+    }
+  }
+}
+EOF
+```
+
+Now let's look at this NGINX configuration file in detail. Inside of `http`, we first define "aliases" for `backend` and `frontend`. NGINX calls these `upstream`:
+
+```
+  upstream backend {
+    server backend:8000;
+  }
+
+  upstream frontend {
+    server frontend:8080;
+  }
+```
+
+> Notice how this file references both `frontend:8080` and `backend:8000`. This is why the `nginx` service needs to be on the `frontend` and `backend` network. Also notice that we are listening on port `80` with `listen 80;`.
+
+[Here](https://stackoverflow.com/a/5238430/6084948) is a helpful explination of how NGINX handles multiple `location` blocks.
+
+Also, [here](https://stackoverflow.com/questions/40516288/webpack-dev-server-with-nginx-proxy-pass) is an explination of the `sockjs-node` block. 
+
+At this point, we should test to see if everything is working. This step is difficult because there are several moving parts that must be implemented at the same time. 
+
+Let's run our new `docker-compose.dev.yml` file with the following command. 
+
+```
+$ docker-compose -f docker-compose.dev.yml up --build
+```
+
+This command will fail, here's why: we allocated port `8000` in `backend`, and try to allocated it again in `nginx`. Let's remove the `ports` entry from the `backend` service definition. 
+
+Run the command again, and verify that the services are working: 
+
+```
+$$ docker-compose -f docker-compose.dev.yml up --buildCreating network "portal_backend_network" with driver "bridge"Creating network "portal_nginx_network" with driver "bridge"Pulling db (postgres:)...latest: Pulling from library/postgres802b00ed6f79: Pulling fs layer4e0de21e2180: Pulling fs layer58b06ac4cd84: Pull complete14e76b354b47: Pull complete0f0c9f244b65: Pull complete37117d8abb6d: Pull complete8b541f5d818a: Pull complete
+7cb4855fcd96: Pull complete
+5c7fe264586b: Pull complete
+64568a495c35: Pull complete
+283257efa745: Pull complete
+222b134fa51d: Pull complete
+e9a30e7f2a9f: Pull complete
+86bffc7855b0: Pull complete
+Digest: sha256:1d26fae6c056760ed5aa5bb5d65d155848f48046ae8cd95c5b26ea7ceabb37ad
+Status: Downloaded newer image for postgres:latest
+Building backend
+Step 1/8 : FROM python:3.6
+3.6: Pulling from library/python
+05d1a5232b46: Pull complete
+5cee356eda6b: Pull complete
+89d3385f0fd3: Pull complete
+80ae6b477848: Pull complete
+28bdf9e584cc: Pull complete
+dec1a1f0462b: Pull complete
+a4670d125615: Pull complete
+547b45a875f5: Pull complete
+ee15e3195a8d: Pull complete
+Digest: sha256:54b8aeb1516d7c180d92b47f9f89641926be05a0469b1376195d6bb4eba383f4
+Status: Downloaded newer image for python:3.6
+ ---> 0c4b4dbe1e58
+Step 2/8 : ENV PYTHONUNBUFFERED 1
+ ---> Running in 608fe05dcc82
+Removing intermediate container 608fe05dcc82
+ ---> d79c95aece63
+Step 3/8 : RUN mkdir /code
+ ---> Running in 17a4d19192a7
+Removing intermediate container 17a4d19192a7
+ ---> 87ecfebca470
+Step 4/8 : WORKDIR /code
+ ---> Running in e92f775a386e
+Removing intermediate container e92f775a386e
+ ---> 31a35b0ba399
+Step 5/8 : ADD requirements.txt /code/
+ ---> b3fce352848f
+Step 6/8 : RUN pip install -r requirements.txt
+ ---> Running in d4afb0085559
+Collecting Django (from -r requirements.txt (line 1))
+  Downloading https://files.pythonhosted.org/packages/32/ab/22530cc1b2114e6067eece94a333d6c749fa1c56a009f0721e51c181ea53/Django-2.1.2-py3-none-any.whl (7.3MB)
+Collecting psycopg2-binary (from -r requirements.txt (line 2))
+  Downloading https://files.pythonhosted.org/packages/3f/4e/b9a5cb7c7451029f67f93426cbb5f5bebedc3f9a8b0a470de7d0d7883602/psycopg2_binary-2.7.5-cp36-cp36m-manylinux1_x86_64.whl (2.7MB)
+Collecting djangorestframework (from -r requirements.txt (line 4))
+  Downloading https://files.pythonhosted.org/packages/90/30/ad1148098ff0c375df2a30cc4494ed953cf7551fc1ecec30fc951c712d20/djangorestframework-3.8.2-py2.py3-none-any.whl (923kB)
+Collecting django-filter (from -r requirements.txt (line 5))
+  Downloading https://files.pythonhosted.org/packages/6a/8b/8517167a0adc45ce94d0873efb9487dd4cdeff7e10f96e837ad3d58f5837/django_filter-2.0.0-py3-none-any.whl (69kB)
+Collecting djangorestframework-jwt (from -r requirements.txt (line 6))
+  Downloading https://files.pythonhosted.org/packages/2b/cf/b3932ad3261d6332284152a00c3e3a275a653692d318acc6b2e9cf6a1ce3/djangorestframework_jwt-1.11.0-py2.py3-none-any.whl
+Collecting pytz (from Django->-r requirements.txt (line 1))
+  Downloading https://files.pythonhosted.org/packages/30/4e/27c34b62430286c6d59177a0842ed90dc789ce5d1ed740887653b898779a/pytz-2018.5-py2.py3-none-any.whl (510kB)
+Collecting PyJWT<2.0.0,>=1.5.2 (from djangorestframework-jwt->-r requirements.txt (line 6))
+  Downloading https://files.pythonhosted.org/packages/93/d1/3378cc8184a6524dc92993090ee8b4c03847c567e298305d6cf86987e005/PyJWT-1.6.4-py2.py3-none-any.whl
+Installing collected packages: pytz, Django, psycopg2-binary, djangorestframework, django-filter, PyJWT, djangorestframework-jwt
+Successfully installed Django-2.1.2 PyJWT-1.6.4 django-filter-2.0.0 djangorestframework-3.8.2 djangorestframework-jwt-1.11.0 psycopg2-binary-2.7.5 pytz-2018.5
+Removing intermediate container d4afb0085559
+ ---> d0d43b3ab10a
+Step 7/8 : COPY scripts/start.sh /
+ ---> e5a950ddb972
+Step 8/8 : ADD . /code/
+ ---> 8e85fdff8433
+Successfully built 8e85fdff8433
+Successfully tagged portal_backend:latest
+Building frontend
+Step 1/8 : FROM node:9.11.1-alpine
+ ---> 9cc7800b3f3c
+Step 2/8 : WORKDIR /app/
+ ---> Running in c554a51aa77f
+Removing intermediate container c554a51aa77f
+ ---> 749d196ed9a4
+Step 3/8 : COPY package.json ./
+ ---> 7e66c006d87d
+Step 4/8 : RUN npm install
+ ---> Running in 53826745963c
+npm WARN deprecated bfj-node4@5.3.1: Switch to the `bfj` package for fixes and new features!
+npm WARN notice [SECURITY] debug has the following vulnerability: 1 low. Gohere for more details: https://nodesecurity.io/advisories?search=debug&version=2.2.0 - Run `npm i npm@latest -g` to upgrade your npm version, and then `npm audit` to get more info.
+npm WARN deprecated @types/commander@2.12.2: This is a stub types definition for commander (https://github.com/tj/commander.js). commander provides itsown type definitions, so you don't need @types/commander installed!
+npm WARN deprecated socks@1.1.10: If using 2.x branch, please upgrade to atleast 2.1.6 to avoid a serious bug with socket data flow and an import issue introduced in 2.1.0
+npm WARN notice [SECURITY] https-proxy-agent has the following vulnerability: 1 high. Go here for more details: https://nodesecurity.io/advisories?search=https-proxy-agent&version=1.0.0 - Run `npm i npm@latest -g` to upgrade your npm version, and then `npm audit` to get more info.
+npm WARN notice [SECURITY] http-proxy-agent has the following vulnerability: 1 high. Go here for more details: https://nodesecurity.io/advisories?search=http-proxy-agent&version=1.0.0 - Run `npm i npm@latest -g` to upgrade yournpm version, and then `npm audit` to get more info.
+npm WARN notice [SECURITY] growl has the following vulnerability: 1 critical. Go here for more details: https://nodesecurity.io/advisories?search=growl&version=1.9.2 - Run `npm i npm@latest -g` to upgrade your npm version, and then `npm audit` to get more info.
+npm WARN babel-loader@8.0.4 requires a peer of @babel/core@^7.0.0 but none is installed. You must install peer dependencies yourself.
+
+npm ERR! code EINTEGRITY
+npm ERR! sha512-+CCi1ED+7f36xpeGUqB8bWHde0To+9ZtegBHwWkbd9NsZcvANrtr8wlRNqHSD8yGmC0F7rixbgwiJEK9mTCLww== integrity checksum failed when using sha512: wanted sha512-+CCi1ED+7f36xpeGUqB8bWHde0To+9ZtegBHwWkbd9NsZcvANrtr8wlRNqHSD8yGmC0F7rixbgwiJEK9mTCLww== but got sha512-41ZwfFdpGbCcncIHnk74WFkpJESr2efWu0ttkWaYlmu1Xa8e1FFREvuOW8pocOVEeV6p6QOesM6LZYKlSajeFw==. (20654717 bytes)
+
+npm ERR! A complete log of this run can be found in:
+npm ERR!     /root/.npm/_logs/2018-10-13T00_57_13_197Z-debug.log
+ERROR: Service 'frontend' failed to build: The command '/bin/sh -c npm install' returned a non-zero code: 1
+brian@brian-ThinkPad-X1-Carbon-6th:~/gitlab/portal$ docker-compose -f docker-compose.dev.yml up --build
+Building backend
+Step 1/8 : FROM python:3.6
+ ---> 0c4b4dbe1e58
+Step 2/8 : ENV PYTHONUNBUFFERED 1
+ ---> Using cache
+ ---> d79c95aece63
+Step 3/8 : RUN mkdir /code
+ ---> Using cache
+ ---> 87ecfebca470
+Step 4/8 : WORKDIR /code
+ ---> Using cache
+ ---> 31a35b0ba399
+Step 5/8 : ADD requirements.txt /code/
+ ---> Using cache
+ ---> b3fce352848f
+Step 6/8 : RUN pip install -r requirements.txt
+ ---> Using cache
+ ---> d0d43b3ab10a
+Step 7/8 : COPY scripts/start.sh /
+ ---> Using cache
+ ---> e5a950ddb972
+Step 8/8 : ADD . /code/
+ ---> Using cache
+ ---> 8e85fdff8433
+Successfully built 8e85fdff8433
+Successfully tagged portal_backend:latest
+Building frontend
+Step 1/8 : FROM node:9.11.1-alpine
+ ---> 9cc7800b3f3c
+Step 2/8 : WORKDIR /app/
+ ---> Using cache
+ ---> 749d196ed9a4
+Step 3/8 : COPY package.json ./
+ ---> Using cache
+ ---> 7e66c006d87d
+Step 4/8 : RUN npm install
+ ---> Running in e17978369eb9
+npm WARN deprecated bfj-node4@5.3.1: Switch to the `bfj` package for fixes and new features!
+npm WARN deprecated @types/commander@2.12.2: This is a stub types definition for commander (https://github.com/tj/commander.js). commander provides itsown type definitions, so you don't need @types/commander installed!
+npm WARN notice [SECURITY] debug has the following vulnerability: 1 low. Gohere for more details: https://nodesecurity.io/advisories?search=debug&version=2.2.0 - Run `npm i npm@latest -g` to upgrade your npm version, and then `npm audit` to get more info.
+npm WARN deprecated socks@1.1.10: If using 2.x branch, please upgrade to atleast 2.1.6 to avoid a serious bug with socket data flow and an import issue introduced in 2.1.0
+npm WARN notice [SECURITY] https-proxy-agent has the following vulnerability: 1 high. Go here for more details: https://nodesecurity.io/advisories?search=https-proxy-agent&version=1.0.0 - Run `npm i npm@latest -g` to upgrade your npm version, and then `npm audit` to get more info.
+npm WARN notice [SECURITY] http-proxy-agent has the following vulnerability: 1 high. Go here for more details: https://nodesecurity.io/advisories?search=http-proxy-agent&version=1.0.0 - Run `npm i npm@latest -g` to upgrade yournpm version, and then `npm audit` to get more info.
+npm WARN notice [SECURITY] growl has the following vulnerability: 1 critical. Go here for more details: https://nodesecurity.io/advisories?search=growl&version=1.9.2 - Run `npm i npm@latest -g` to upgrade your npm version, and then `npm audit` to get more info.
+
+> chromedriver@2.42.0 install /app/node_modules/chromedriver
+> node install.js
+
+Downloading https://chromedriver.storage.googleapis.com/2.42/chromedriver_linux64.zip
+Saving to /app/node_modules/chromedriver/chromedriver/chromedriver_linux64.zip
+Received 781K...
+Received 1571K...
+Received 2355K...
+Received 3139K...
+Received 3923K...
+Received 3944K total.
+Extracting zip contents
+Copying to target path /app/node_modules/chromedriver/lib/chromedriver
+Fixing file permissions
+Done. ChromeDriver binary available at /app/node_modules/chromedriver/lib/chromedriver/chromedriver
+
+> yorkie@2.0.0 install /app/node_modules/yorkie
+> node bin/install.js
+
+setting up Git hooks
+can't find .git directory, skipping Git hooks installation
+npm notice created a lockfile as package-lock.json. You should commit this file.
+npm WARN babel-loader@8.0.4 requires a peer of @babel/core@^7.0.0 but none is installed. You must install peer dependencies yourself.
+npm WARN optional SKIPPING OPTIONAL DEPENDENCY: fsevents@1.2.4 (node_modules/fsevents):
+npm WARN notsup SKIPPING OPTIONAL DEPENDENCY: Unsupported platform for fsevents@1.2.4: wanted {"os":"darwin","arch":"any"} (current: {"os":"linux","arch":"x64"})
+
+added 1679 packages in 43.09s
+Removing intermediate container e17978369eb9
+ ---> 8c0e715c1bc5
+Step 5/8 : COPY . .
+ ---> f9cb2e9de63e
+Step 6/8 : WORKDIR /app/frontend
+ ---> Running in 87a17185ef71
+Removing intermediate container 87a17185ef71
+ ---> e95bd3cadf5f
+Step 7/8 : EXPOSE 8080
+ ---> Running in ec21b4cfa54c
+Removing intermediate container ec21b4cfa54c
+ ---> 7d20d8a9f74e
+Step 8/8 : CMD ["npm", "run", "serve"]
+ ---> Running in 03008f43b31b
+Removing intermediate container 03008f43b31b
+ ---> d94fbade9e49
+Successfully built d94fbade9e49
+Successfully tagged portal_frontend:latest
+Pulling nginx (nginx:alpine)...
+alpine: Pulling from library/nginx
+4fe2ade4980c: Pull complete
+c3f09dfaf47d: Pull complete
+83283d0e9bb9: Pull complete
+e2e530da9538: Pull complete
+Digest: sha256:ae5da813f8ad7fa785d7668f0b018ecc8c3a87331527a61d83b3b5e816a0f03c
+Status: Downloaded newer image for nginx:alpine
+Creating portal_db_1 ... done
+Creating portal_backend_1 ... done
+Creating portal_nginx_1    ... error
+Creating portal_frontend_1 ...
+
+ERROR: for portal_nginx_1  Cannot start service nginx: driver failed programming external connectivity on endpoint portal_nginx_1 (85267b60eb70e9389b24a864c2ebde3d0b99ba5b414c0cde147d86e19aa0dee0): Bind for 0.0.0.0:8000 failed:Creating portal_frontend_1 ... done
+
+ERROR: for nginx  Cannot start service nginx: driver failed programming external connectivity on endpoint portal_nginx_1 (85267b60eb70e9389b24a864c2ebde3d0b99ba5b414c0cde147d86e19aa0dee0): Bind for 0.0.0.0:8000 failed: port is already allocated
+ERROR: Encountered errors while bringing up the project.
+brian@brian-ThinkPad-X1-Carbon-6th:~/gitlab/portal$ docker-compose -f docker-compose.dev.yml up --build
+Building backend
+Step 1/8 : FROM python:3.6
+ ---> 0c4b4dbe1e58
+Step 2/8 : ENV PYTHONUNBUFFERED 1
+ ---> Using cache
+ ---> d79c95aece63
+Step 3/8 : RUN mkdir /code
+ ---> Using cache
+ ---> 87ecfebca470
+Step 4/8 : WORKDIR /code
+ ---> Using cache
+ ---> 31a35b0ba399
+Step 5/8 : ADD requirements.txt /code/
+ ---> Using cache
+ ---> b3fce352848f
+Step 6/8 : RUN pip install -r requirements.txt
+ ---> Using cache
+ ---> d0d43b3ab10a
+Step 7/8 : COPY scripts/start.sh /
+ ---> Using cache
+ ---> e5a950ddb972
+Step 8/8 : ADD . /code/
+ ---> 3b5037e242de
+Successfully built 3b5037e242de
+Successfully tagged portal_backend:latest
+Building frontend
+Step 1/8 : FROM node:9.11.1-alpine
+ ---> 9cc7800b3f3c
+Step 2/8 : WORKDIR /app/
+ ---> Using cache
+ ---> 749d196ed9a4
+Step 3/8 : COPY package.json ./
+ ---> Using cache
+ ---> 7e66c006d87d
+Step 4/8 : RUN npm install
+ ---> Using cache
+ ---> 8c0e715c1bc5
+Step 5/8 : COPY . .
+ ---> Using cache
+ ---> f9cb2e9de63e
+Step 6/8 : WORKDIR /app/frontend
+ ---> Using cache
+ ---> e95bd3cadf5f
+Step 7/8 : EXPOSE 8080
+ ---> Using cache
+ ---> 7d20d8a9f74e
+Step 8/8 : CMD ["npm", "run", "serve"]
+ ---> Using cache
+ ---> d94fbade9e49
+Successfully built d94fbade9e49
+Successfully tagged portal_frontend:latest
+portal_db_1 is up-to-date
+Recreating portal_backend_1 ... done
+Recreating portal_nginx_1    ... done
+Recreating portal_frontend_1 ... done
+Attaching to portal_db_1, portal_backend_1, portal_frontend_1, portal_nginx_1
+backend_1   | No changes detected
+db_1        | The files belonging to this database system will be owned by user "postgres".
+db_1        | This user must also own the server process.
+db_1        |
+db_1        | The database cluster will be initialized with locale "en_US.utf8".
+db_1        | The default database encoding has accordingly been set to "UTF8".
+db_1        | The default text search configuration will be set to "english".
+db_1        |
+db_1        | Data page checksums are disabled.
+db_1        |
+db_1        | fixing permissions on existing directory /var/lib/postgresql/data ... ok
+db_1        | creating subdirectories ... ok
+db_1        | selecting default max_connections ... 100
+db_1        | selecting default shared_buffers ... 128MB
+db_1        | selecting dynamic shared memory implementation ... posix
+db_1        | creating configuration files ... ok
+db_1        | running bootstrap script ... ok
+db_1        | performing post-bootstrap initialization ... ok
+db_1        |
+db_1        | WARNING: enabling "trust" authentication for local connections
+db_1        | You can change this by editing pg_hba.conf or using the option -A, or
+db_1        | --auth-local and --auth-host, the next time you run initdb.
+db_1        | syncing data to disk ... ok
+db_1        |
+db_1        | Success. You can now start the database server using:
+db_1        |
+db_1        |     pg_ctl -D /var/lib/postgresql/data -l logfile start
+db_1        |
+db_1        | ****************************************************
+db_1        | WARNING: No password has been set for the database.
+db_1        |          This will allow anyone with access to the
+db_1        |          Postgres port to access your database. In
+db_1        |          Docker's default configuration, this is
+db_1        |          effectively any other container on the same
+db_1        |          system.
+db_1        |
+db_1        |          Use "-e POSTGRES_PASSWORD=password" to set
+db_1        |          it in "docker run".
+db_1        | ****************************************************
+db_1        | waiting for server to start....2018-10-13 01:01:00.616 UTC [45] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+db_1        | 2018-10-13 01:01:00.633 UTC [46] LOG:  database system was shut down at 2018-10-13 01:01:00 UTC
+db_1        | 2018-10-13 01:01:00.638 UTC [45] LOG:  database system is ready to accept connections
+db_1        |  done
+db_1        | server started
+db_1        |
+db_1        | /usr/local/bin/docker-entrypoint.sh: ignoring /docker-entrypoint-initdb.d/*
+db_1        |
+db_1        | waiting for server to shut down...2018-10-13 01:01:00.707 UTC[45] LOG:  received fast shutdown request
+db_1        | .2018-10-13 01:01:00.712 UTC [45] LOG:  aborting any active transactions
+db_1        | 2018-10-13 01:01:00.713 UTC [45] LOG:  worker process: logical replication launcher (PID 52) exited with exit code 1
+db_1        | 2018-10-13 01:01:00.713 UTC [47] LOG:  shutting down
+db_1        | 2018-10-13 01:01:00.753 UTC [45] LOG:  database system is shut down
+db_1        |  done
+db_1        | server stopped
+db_1        |
+db_1        | PostgreSQL init process complete; ready for start up.
+db_1        |
+db_1        | 2018-10-13 01:01:00.818 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+db_1        | 2018-10-13 01:01:00.818 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+db_1        | 2018-10-13 01:01:00.825 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+db_1        | 2018-10-13 01:01:00.874 UTC [54] LOG:  database system was shut down at 2018-10-13 01:01:00 UTC
+db_1        | 2018-10-13 01:01:00.879 UTC [1] LOG:  database system is ready to accept connections
+backend_1   | Operations to perform:
+backend_1   |   Apply all migrations: admin, auth, contenttypes, posts, sessions
+frontend_1  |
+frontend_1  | > code@0.1.0 serve /app/frontend
+frontend_1  | > vue-cli-service serve
+frontend_1  |
+frontend_1  |  INFO  Starting development server...
+backend_1   | Running migrations:
+backend_1   |   No migrations to apply.
+backend_1   | Performing system checks...
+backend_1   |
+backend_1   | System check identified no issues (0 silenced).
+backend_1   | October 13, 2018 - 01:03:48
+backend_1   | Django version 2.1.2, using settings 'backend.settings'
+backend_1   | Starting development server at http://0.0.0.0:8000/
+backend_1   | Quit the server with CONTROL-C.
+
+...
+
+frontend_1  |
+
+frontend_1  |   App running at:
+frontend_1  |   - Local:   http://localhost:8080/
+frontend_1  |
+frontend_1  |   It seems you are running Vue CLI inside a container.
+frontend_1  |   Access the dev server via http://localhost:<your container's external mapped port>/
+frontend_1  |
+frontend_1  |   Note that the development build is not optimized.
+frontend_1  |   To create a production build, run npm run build.
+frontend_1  |
+
+```
+
+This will build our four containers: 
+
+- `db`
+- `backend`
+- `frontend`
+- `nginx`
+
+It will also configure the networks that we mentioded eariler. 
+
+Notice that `frontend` acknowledges that we are running Vue CLI inside a container. 
+
+It's important to pay attention to the `ports` in our networked containers at this time as this could possibly be a little confusing. 
+
+We see that the Djnago app is listening on `localhost:8000`. However, if we go to this address, we will see a response in the terminal running `docker-compose` show activity from NGINX: 
+
+```
+nginx_1     | 172.18.0.1 - - [13/Oct/2018:01:11:20 +0000] "GET / HTTP/1.1" 304 0 "-" "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36"
+nginx_1     | 172.18.0.1 - - [13/Oct/2018:01:11:20 +0000] "GET /sockjs-node/561/jphm10su/websocket HTTP/1.1" 101 258 "-" "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36"
+...
+```
+
+We now have a working frontend, and a working backend. However, these services are not yet talking to eachother. Let's connect our backend with our frontend by displaying `posts` from our Django API on a new page in our VueJS app. 
+
+At this point, all of our hard work in setting up our local development server will start to pay off. Why? Because we will now be able to edit our VueJS and Django appliction source code and we will see changes reflected in both applications immediately without having to restart our docker containers. 
+
+*Note*: this is our **development environemnt**. It will not be suitable for a production environment. Could it be used in a production environment? Probably? We can test that later. 
+
+For now, let's focus on connecting our backend and frontend. First, let's add the following to our VueJS app:
+
+*routes.js*
+
+```javascript
+    {
+      path: '/posts',
+      name: 'posts',
+      // route level code-splitting
+      // this generates a separate chunk (about.[hash].js) for this route
+      // which is lazy-loaded when the route is visited.
+      component: () => import(/* webpackChunkName: "posts" */ './views/Posts.vue'),
+    },
+```
+
+*App.vue*
+
+```html
+      <router-link to="/">Home</router-link> |
+      <router-link to="/posts">Posts</router-link> |
+      <router-link to="/about">About</router-link>
+```
+
+*Posts.vue
+
+```html
+<template>
+  <div>
+    <div v-for="(post, i) in posts" :key="i">
+      <h1 :key="i">{{ post.title }}</h1>
+      <p :key="i">{{ post.content }}</p>
+    </div>
+  </div>
+</template>
+
+<script>
+export default {
+  data() {
+    return {
+      posts: [],
+    };
+  },
+  mounted() {
+    this.fetchPosts();
+    document.title = 'Posts';
+  },
+  methods: {
+    fetchPosts() {
+      fetch('http://localhost:8000/api/posts/', {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+        },
+      })
+        .then((response) => {
+          if (response.ok) {
+            response.json().then((json) => {
+              this.posts = json;
+            });
+          }
+        });
+    },
+  },
+};
+</script>
+
+<style scoped>
+  h1 {
+    color: green;
+  }
+  p {
+    color: blue;
+  }
+</style>
+```
+
+We don't see any posts. Let's take a look in the Chrome Developer Console:
+
+```
+VM2475:1 GET http://localhost:8000/api/posts/ 401 (Unauthorized)
+Posts.vue?3dcd:21 
+Promise {<resolved>: {…}}
+__proto__: Promise
+[[PromiseStatus]]: "resolved"
+[[PromiseValue]]: Object
+detail: "Authentication credentials were not provided."
+__proto__: Object
+```
+
+This is what we expect. Here we are getting a response from the server saying that we are unauthorized to access the requested resources. 
+
+We have two options for the next step:
+
+1. We could implement an authenticatoin system that will obtain a token and pass the token in the header of all subsequent requests. 
+
+2. We could change the permissions for the post model so that any user can access `/api/posts/`.
+
+Let's take option `2` for now and revisit authentication soon. 
+
+All we have to do is change `REST_FRAMEWORK` in our settings:
+
+```python
+REST_FRAMEWORK = {
+    'DEFAULT_PERMISSION_CLASSES': (
+        # 'rest_framework.permissions.IsAuthenticated',
+    ),
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        # 'rest_framework_jwt.authentication.JSONWebTokenAuthentication',
+        # 'rest_framework.authentication.SessionAuthentication',
+        # 'rest_framework.authentication.BasicAuthentication',
+    ),
+}
+```
+
+Now that we have commented out all permission and authentication classes, we should be able to see our Posts in our VueJS frontend.
+
+If you haven't already done so, make sure that you have some posts in your database. You can check the posts you have by navigating to `localhost:8000/api/posts/`.
+
+You probably don't see any static files in the browsable API. Let's fix this by adding `python3 manage.py collectstatic` to the container's `command` phase:
+
+*start.sh*
+
+```bash
+#!/bin/bash
+
+cd backend
+python3 manage.py collectstatic --no-input
+python3 manage.py makemigrations
+python3 manage.py migrate --no-input
+python3 manage.py runserver 0.0.0.0:8000
+```
+
+You may see the following error:
+
+```
+django.core.exceptions.ImproperlyConfigured: You're using the staticfiles app without having set the STATIC_ROOT setting to a filesystem path.
+```
+
+Let's add the following to the bottom of `settings.py`:
+
+```python
+STATIC_ROOT = 'static'
+```
+
+Also, let's create a `.gitignore` file and put `static` in it:
+
+```
+$ echo "static" > backend/.gitignore
+```
+
+We also need to add the following `location` block to our NGINX configuration:
+
+```
+    location /static {
+      proxy_pass http://backend;
+    }
+```
+
+Let's restart docker-compose with the `--build` option:
+
+```
+$ docker-compose -f docker-compose.dev.yml up --build
+```
+
+We will also need to create a superuser. A nice shortcut for shelling into a container uses the Docker extension for Visual Studio Code. Go to Docker > Containers. Right click on the container you want to use and then select `Attach shell` and you will open up an interactive shell:
+
+```
+$ docker exec -it dc3d96b0faea959d4d4c6dc030a74fbe6349529f4d63281c26b0337bc3542a27 /bin/sh
+# cd backend
+# ./manage.py createsuperuser
+/code/backend
+Username (leave blank to use 'root'): admin
+Email address:
+Password:
+Password (again):
+This password is too common.
+Bypass password validation and create user anyway? [y/N]: y
+Superuser created successfully.
+```
+
+Great, now we should be able to see our posts displayed from our VueJS app. 
+
+Let's commit this work and then setup our production `docker-compose` with nginx and our frontend.
+
+```
+ git status
+On branch vueapp
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git checkout -- <file>..." to discard changes in working directory)
+
+        modified:   README.md
+        modified:   backend/backend/settings.py
+        modified:   backend/scripts/start.sh
+        modified:   frontend/src/App.vue
+        modified:   frontend/src/router.js
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+
+        backend/.gitignore
+        docker-compose.dev.yml
+        frontend/Dockerfile
+        frontend/src/views/Posts.vue
+        nginx/
+
+no changes added to commit (use "git add" and/or "git commit -a")
+$ git add .
+$ git commit -m "completed development environemnt: added nginx, connected frontend and backend, fixed static files"
+```
