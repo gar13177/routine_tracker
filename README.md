@@ -2157,5 +2157,12 @@ no changes added to commit (use "git add" and/or "git commit -a")
 
 ```
 $ git add .
-$ git commit -m "fixed production docker-compose file, added scrpits and configuration files for production environment
+$ git commit -m "fixed production docker-compose file, added scrpits and configuration files for production environment"
+```
+
+Now let's merge our `vueapp` branch back into our `develop` branch. 
+
+```
+$ git checkout develop
+$ git merge vueapp
 ```
