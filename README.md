@@ -2166,3 +2166,12 @@ Now let's merge our `vueapp` branch back into our `develop` branch.
 $ git checkout develop
 $ git merge vueapp
 ```
+
+Finally, we can merge our `develop` branch into `master` and tag the commit with `1.0`. 
+
+```
+$ git checkout -b release-1.0 develop
+$ git checkout master
+$ git merge --no-ff release-1.0
+$ git tag -a 1.0
+```
