@@ -1,0 +1,47 @@
+version: '3'
+
+services:
+  db:
+    image: postgres
+    networks: 
+      - backend_network
+
+  backend:
+    build: ./backend
+    command: /start_dev.sh
+    volumes:
+      - .:/code
+    depends_on:
+      - db
+    networks:
+      - nginx_network
+      - backend_network
+
+  frontend:
+    build:
+      context: ./frontend
+    volumes:
+      - ./frontend:/app/frontend:ro
+    networks:
+      - nginx_network
+    depends_on:
+      - backend
+      - db
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8000:80"
+    depends_on:
+      - backend
+    volumes:
+      - ./nginx/dev.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - nginx_network
+      - backend_network
+
+networks:
+  nginx_network:
+    driver: bridge
+  backend_network:
+    driver: bridge
