@@ -1,14 +1,39 @@
 version: '3'
 
 services:
-  db:
-    image: postgres
-  web:
-    build: ./backend
-    command: /start.sh
+  backend:
+    build:
+      context: ./backend
+    command: /start_prod.sh
     volumes:
       - .:/code
-    ports:
-      - "8000:8000"
     depends_on:
       - db
+    networks:
+      - nginx_network
+      - backend_network
+
+  db:
+    image: postgres
+    networks: 
+      - backend_network
+
+  nginx:
+    build:
+      context: .
+      dockerfile: nginx/Dockerfile
+    ports:
+      - 8000:80
+    volumes:
+      - ./nginx/prod.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+    networks: 
+      - nginx_network
+      - backend_network
+
+networks:
+  nginx_network:
+    driver: bridge
+  backend_network:
+    driver: bridge

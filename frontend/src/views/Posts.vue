@@ -20,7 +20,7 @@ export default {
   },
   methods: {
     fetchPosts() {
-      fetch('http://backend:8000/api/posts/', {
+      fetch('http://0.0.0.0:8000/api/posts/', {
         method: 'GET',
         headers: {
           Accept: 'application/json',

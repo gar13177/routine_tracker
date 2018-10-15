@@ -441,7 +441,7 @@ COPY scripts/start.sh /
 ADD . /code/
 ```
 
-We added this line: `COPY scripts/start.sh /`. Since our `context` was set to `backend` in `docker-compose.yml`, we will have access to `scripts/start.sh` in the Docker container when it starts up. Now that we have carefully moved all of our files into place, we are ready to user `docker-compse up`. This command does nothing more than running multiple containers as specified by the `docker-compose.yml` file. Actually, it takes care of two other important docker concept: `networks` and `volumes`--we will get to these soon.
+We added this line: `COPY scripts/start.sh /`. Since our `context` was set to `backend` in `docker-compose.yml`, we will have access to `scripts/start.sh` in the Docker container when it starts up. Now that we have carefully moved all of our files into place, we are ready to user `docker-compose up`. This command does nothing more than running multiple containers as specified by the `docker-compose.yml` file. Actually, it takes care of two other important docker concept: `networks` and `volumes`--we will get to these soon.
 
 By default, `docker-compose up` looks for a file named `docker-compose.yml` in the same directory that it uses to start containers.
 
@@ -1171,7 +1171,7 @@ Next, we see that the service definition for `frontend` lists `nginx_network` un
 
 Now let's look at NGINX. NGINX is a webserver and reverse proxy that will play an important role in our application. NGINX is analogous to the "front desk" in that it directs traffic to the files or service URLs that specifies. If you are familiar with Django's URL routing, I think it is fair to say that NGINX is like a higher-level version of `urls.py` in that it directs traffic based on the properties of the incoming URLs.
 
-```
+```yml
   nginx:
     image: nginx:alpine
     ports:
@@ -1668,7 +1668,7 @@ We now have a working frontend, and a working backend. However, these services a
 
 At this point, all of our hard work in setting up our local development server will start to pay off. Why? Because we will now be able to edit our VueJS and Django appliction source code and we will see changes reflected in both applications immediately without having to restart our docker containers. 
 
-*Note*: this is our **development environemnt**. It will not be suitable for a production environment. Could it be used in a production environment? Probably? We can test that later. 
+*Note*: this is our **development environemnt**. It will not be suitable for a production environment. Could it be used in a production environment? Probably. We can test that later. 
 
 For now, let's focus on connecting our backend and frontend. First, let's add the following to our VueJS app:
 
@@ -1881,3 +1881,281 @@ $ git add .
 $ git commit -m "completed development environemnt: added nginx, connected frontend and backend, fixed static files"
 ```
 
+## Production development environment
+
+We finished setting up `docker-compose.dev.yml`. We will run `docker-compse` with this file as we develop our app. To start development, all we have to do is run:
+
+```
+$ docker-compose -f docker-compose.dev.yml up
+```
+
+When we make any changes to our docker-compose or Dockerfiles, or the scripts and commands used to start our docker containers, we will need to add the `--build` flag. If we forget to add the build flag after editing a docker-related file, the docker engine will use the cached version of our containers. 
+
+```
+$ docker-compose -f docker-compose.dev.yml up --build
+```
+
+This will tell the docker engine to look for any changes and rebuild the layers that have been changed. This is one of docker's best features. 
+
+However, when we run this application in production, we don't want to be using `npm run serve`, we also don't want to be using Django's `runserver` command; this command is not designed for production (Django is a framework for building web applications, not a webserver). Instead, we will serve a `collection of static files` that is optimized for production. This `collection of static files` is generated with `npm run build` and it lives in the `dist` folder in `frontend`. And for Django, we will replace `runserver` with [**gunicorn**](https://gunicorn.org/). 
+
+Let's go back to `docker-compose.yml` and think about what we need. First, we don't need the `frontend` service that we added to `docker-compose.dev.yml`. We will need NGINX, but in our NGING config file for production we won't need to listen for `/sockjs-node`. 
+
+To clarify, we will need to edit our existing `docker-compose.yml` for production, and we will also need to create a new file called `prod.conf` to replace `dev.conf` in our production environment. Let's look at `docker-compose.yml` first, and then `prod.conf`, and finally we will create a `Dockerfile` that combines building a `collection of static files` (which will be our production VueJS app) with running our NGINX container.
+
+**docker-compose.yml**
+
+```yml
+version: '3'
+
+services:
+  backend:
+    build:
+      context: ./backend
+    command: /start.sh
+    volumes:
+      - .:/code
+    depends_on:
+      - db
+    networks:
+      - nginx_network
+      - backend_network
+
+  db:
+    image: postgres
+    networks: 
+      - backend_network
+
+  nginx:
+    build:
+      context: .
+      dockerfile: nginx/Dockerfile
+    ports:
+      - 8000:80
+    volumes:
+      - ./nginx/prod.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+    networks: 
+      - nginx_network
+      - backend_network
+
+networks:
+  nginx_network:
+    driver: bridge
+  backend_network:
+    driver: bridge
+```
+
+Notice two things:
+
+1. We don't define a `frontend` service in the docker-compose file. Also, we mount a different configuration file for the NGINX service. Let's take a look at this file, `prod.conf`:
+
+2. An important differences between our `docker-compose.dev.yml` file and this `docker-compose.yml` file: 
+
+**docker-compose.dev.yml**
+
+```yml
+  nginx:
+    image: nginx:alpine
+```
+
+**docker-compose.yml**
+
+```yml
+  nginx:
+    build:
+      context: ./nginx
+```
+
+This means we are using a custom `Dockerfile` for our production environment and a base image `nginx:alpine` for our development environemt. We will take a look at this Dockerfile after we look at the NGINX configuration file: 
+
+**prod.conf**
+
+```
+user  nginx;
+worker_processes  1;
+
+events {
+  worker_connections  1024;
+}
+
+http {
+  include /etc/nginx/mime.types;
+  client_max_body_size 100m;
+
+  upstream backend {
+    server backend:8000;
+  }
+
+  server {
+    listen 80;
+    charset utf-8;
+
+    root /dist/;
+    index index.html;
+
+    # frontend
+    location / {
+      try_files $uri $uri/ @rewrites;
+    }
+
+    location @rewrites {
+      rewrite ^(.+)$ /index.html last;
+    }
+
+    # backend urls
+    location ~ ^/(admin|api) {
+      proxy_redirect off;
+      proxy_pass http://backend;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header Host $http_host;
+    }
+
+    # backend static
+    location ~ ^/(staticfiles|media)/(.*)$ {
+      alias /$1/$2;
+    }
+
+    # Some basic cache-control for static files to be sent to the browser
+    location ~* \.(?:ico|css|js|gif|jpe?g|png)$ {
+      expires max;
+      add_header Pragma public;
+      add_header Cache-Control "public, must-revalidate, proxy-revalidate";
+    }
+  }
+}
+```
+
+In this NGINX configuration file, we direct traffic to our Django container for `admin` and `api` requests (or any other request that we wish to define manually), and all other traffic is routed to `index.html` where our VueJS app takes over routing (such as with the `/posts` route that we defined earlier). 
+
+Now let's have a look at the `Dockerfile` for our NGINX service. We use an interesting technique that is documented [here](https://vuejs.org/v2/cookbook/dockerize-vuejs-app.html) in VueJS documentation for dockering VueJS applications called a `multi-stage build process`:
+
+**nginx/Dockerfile**
+
+```
+# build stage
+FROM node:9.11.1-alpine as build-stage
+WORKDIR /app/
+COPY frontend/package.json /app/
+RUN npm install
+COPY frontend /app/
+RUN npm run build
+
+# production stage
+FROM nginx:1.13.12-alpine as production-stage
+COPY nginx/prod.conf /etc/nginx/nginx.conf
+COPY --from=build-stage /app/dist /dist/
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+The `build stage` section of this Dockerfile is responsible for building our `collection of static files` that we will serve in production. The `production stage` takes the `collection of static files` (that was generated with `npm run build`) from `/app/dist` of our `build stage` and copies this directory into the `/dist` folder of our NGINX container where they are served by NGINX. This multi-stage build process helps us maintain smaller layers which results in smaller images. 
+
+Now let's run our production `docker-compose` file to test it out:
+
+```
+$ docker-compose up --build
+```
+
+Everything should be working now. This is our production environment, so and changes to our VueJS app will not be reflected in our browser because we are serving files from our `collection of static files`, we are not running `npm run serve` like we do in `docker-compose.dev.yml`.
+
+We need to fix one more thing about our Django app: switch out the `runserver` command with `gunicorn`. To do this, let's split `start.sh` into two files: `start_dev.sh` for our development environment (to be ran when we use `docker-compose.dev.yml`), and `start.sh` for our production Django app when we use `docker-compose.yml`. Make sure that both files are executable so docker-compose can run them:
+
+**start_dev.sh**
+
+```
+#!/bin/bash
+
+cd backend
+python3 manage.py collectstatic --no-input
+python3 manage.py makemigrations
+python3 manage.py migrate --no-input
+python3 manage.py runserver 0.0.0.0:8000
+```
+
+**start_prod.sh**
+
+```
+#!/bin/bash
+
+cd backend
+python3 manage.py makemigrations
+python3 manage.py migrate --no-input
+gunicorn backend.wsgi -b 0.0.0.0:8000
+```
+
+Let's add `gunicorn` to our `requirements.txt` file.
+
+```
+$ sudo chmod +x backend/scripts/start_dev.sh backend/scripts/start_prod.sh
+```
+
+Be sure to change the `command` part of `docker-compose.yml` and `docker-compose.dev.yml` so that they run `start_prod.sh` and `start_dev.sh`, respectively.
+
+Also, we need to update `backend/Dockerfile` to `COPY` these new files (before it was copying `start.sh`):
+
+```
+COPY scripts/start*.sh /
+```
+
+This copies both `start_dev.sh` and `start_prod.sh` to the top level of the `backend` container. 
+
+Now let's run our development and production environments to make sure that they both still work. Let's make sure that tests for both the Django and VueJS app both pass. 
+
+You should see that something is not working correctly: requests to our our `backend` service are failing: 
+
+```
+Failed to load http://localhost:8000/api/posts/: No 'Access-Control-Allow-Origin' header is present on the requested resource. Origin 'http://0.0.0.0:8000' is therefore not allowed access. If an opaque response serves your needs, set the request's mode to 'no-cors' to fetch the resource with CORS disabled.
+```
+
+If you have been accessing `localhost:8000`, you would not have noticed this issue. 
+
+First let's fix the issue, and then we can look into what CORS is, why we don't need it when we access our app on `localhost`, and why do need it when we access our app on `0.0.0.0`. 
+
+First, add `django-cors-headers` to `requirements.txt`. 
+
+Next, in `settings.py` add `'corsheaders',` to `INSTALLED_APPS` and add `'corsheaders.middleware.CorsMiddleware',` to `MIDDLEWARE`.
+
+Finally, make sure that the axios `GET` request in `Posts.vue` has a base URL of `0.0.0.0:8000`. 
+
+Now let's run our app and check to see if we still have an error with `CORS` when trying to access our `backend` API:
+
+```
+$ docker-compose up --build
+```
+
+Now we should see our posts with no `CORS` errors. We have already changed a lot since our last commit. Let's commit our changes now. 
+
+```
+$ git status
+On branch vueapp
+Changes not staged for commit:
+  (use "git add/rm <file>..." to update what will be committed)
+  (use "git checkout -- <file>..." to discard changes in working directory)
+
+        modified:   .gitignore
+        modified:   README.md
+        modified:   backend/Dockerfile
+        modified:   backend/backend/settings.py
+        modified:   backend/requirements.txt
+        deleted:    backend/scripts/start.sh
+        modified:   docker-compose.dev.yml
+        modified:   docker-compose.yml
+        modified:   frontend/src/views/Posts.vue
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+
+        backend/scripts/start_dev.sh
+        backend/scripts/start_prod.sh
+        nginx/Dockerfile
+        nginx/prod.conf
+
+no changes added to commit (use "git add" and/or "git commit -a")
+```
+
+```
+$ git add .
+$ git commit -m "fixed production docker-compose file, added scrpits and configuration files for production environment
+```
