@@ -2175,3 +2175,65 @@ $ git checkout master
 $ git merge --no-ff release-1.0
 $ git tag -a 1.0
 ```
+
+## Issues
+
+I have come up against a few issues that were difficult to debug, here's an explination of the issues and how I resolved them. 
+
+### Static files
+
+Since we are using Django's admin and the Django ReST Framework browseable API interface for development and testing, it is important that static files are working properly. 
+
+Here's a guide that I found helpful: 
+
+- [https://blog.skindc.co.uk/dockerise-django-and-static-files-with-nginx/](https://blog.skindc.co.uk/dockerise-django-and-static-files-with-nginx/)
+
+This article takes an elegant approach to serving Django static files from nginx using a shared volume. 
+
+In `docker-compose.yml` we can define an empty volume: 
+
+```yml
+volumes:
+  django-static:
+```
+
+Then we will use this volume in the service definition for both `backend` and `nginx`.
+
+```yml
+  backend:
+    ...
+    volumes:
+      - .:/code
+      - django-static:/backend/static
+
+  ...
+
+  nginx:
+    ...
+    volumes:
+      - ./nginx/prod.conf:/etc/nginx/nginx.conf:ro
+      - django-static:/usr/src/app/static
+```
+
+When the backend container starts, we run `collectstatic` (see `backend/scripts/start_prod.sh`). `collectstatic` is a Django command that depends on static-related settings in `settings.py`: `STATIC_URL` and `STATIC_ROOT`:
+
+```python
+STATIC_URL = '/static/'
+
+STATIC_ROOT = 'static'
+```
+
+`STATIC_ROOT` is relative to `manage.py`, which is in our top-level `backend` folder: `/backend/static/`, and it is where `admin` and `djangorestframework` will place static files when the `collectstatic` command is executed. 
+
+So, when we run `collectstatic`, all of the collected static files are placed in `/backend/static`, and they are also available in the `django-static` (because we mounted the volume in our `backend` service.) 
+
+Then, in the `nginx` service, we mount the `django-static` volume to `/usr/src/app/static`. When a request that starts with `/static` comes in, we route it to `/usr/src/app/static` instead of having Django process the request. Here's the `location` block in nginx that handles this:
+
+```
+    # static files
+    location /static {    
+      autoindex on;    
+      alias /usr/src/app/static;
+    }
+```
+

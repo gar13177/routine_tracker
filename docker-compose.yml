@@ -5,35 +5,36 @@ services:
     build:
       context: ./backend
     command: /start_prod.sh
+    networks:
+      - django-nginx
     volumes:
       - .:/code
+      - django-static:/backend/static
     depends_on:
       - db
-    networks:
-      - nginx_network
-      - backend_network
 
   db:
     image: postgres
-    networks: 
-      - backend_network
+    networks:
+      - django-nginx
 
   nginx:
     build:
       context: .
       dockerfile: nginx/Dockerfile
     ports:
-      - 8000:80
+      - 80:80
+    networks:
+      - django-nginx
     volumes:
       - ./nginx/prod.conf:/etc/nginx/nginx.conf:ro
+      - django-static:/usr/src/app/static
     depends_on:
       - backend
-    networks: 
-      - nginx_network
-      - backend_network
+
+volumes:
+  django-static:
 
 networks:
-  nginx_network:
-    driver: bridge
-  backend_network:
+  django-nginx:
     driver: bridge

@@ -3,30 +3,29 @@ version: '3'
 services:
   db:
     image: postgres
-    networks: 
-      - backend_network
+    networks:
+      - django-nginx
 
   backend:
     build: ./backend
     command: /start_dev.sh
     volumes:
       - .:/code
+      - django-static:/backend/static
+    networks:
+      - django-nginx
     depends_on:
       - db
-    networks:
-      - nginx_network
-      - backend_network
 
   frontend:
     build:
       context: ./frontend
     volumes:
       - ./frontend:/app/frontend:ro
-    networks:
-      - nginx_network
     depends_on:
       - backend
-      - db
+    networks:
+      - django-nginx
 
   nginx:
     image: nginx:alpine
@@ -34,14 +33,16 @@ services:
       - "8000:80"
     depends_on:
       - backend
+      - frontend
     volumes:
       - ./nginx/dev.conf:/etc/nginx/nginx.conf:ro
+      - django-static:/usr/src/app/static
     networks:
-      - nginx_network
-      - backend_network
+      - django-nginx
+
+volumes:
+  django-static:
 
 networks:
-  nginx_network:
-    driver: bridge
-  backend_network:
+  django-nginx:
     driver: bridge
