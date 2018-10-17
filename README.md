@@ -2237,3 +2237,113 @@ Then, in the `nginx` service, we mount the `django-static` volume to `/usr/src/a
     }
 ```
 
+## Continuous Integration
+
+At this point we should integrate continuous integration into our project. Continuous integration will tell us if the code we push to GitLab passes tests. GitLab offers built-in continuous integration that is simple to configure. To start using continuous integration, we need to include a file in the base directory of our project called `gitlab-ci.yml`. If we want to use another name for this file, we can specify this in GitLab's project settings. 
+
+[GitLab Continuous Integration (GitLab CI/CD)](https://docs.gitlab.com/ce/ci/)
+
+[`gitlab-ci.yml` reference](https://docs.gitlab.com/ce/ci/yaml/)
+
+Let's look at a sample `gitlab-ci.yml` file for a Django project like ours: 
+
+
+```yml
+# Official framework image. Look for the different tagged releases at:
+# https://hub.docker.com/r/library/python
+image: python:3.6
+
+# Pick zero or more services to be used on all builds.
+# Only needed when using a docker container to run your tests in.
+# Check out: http://docs.gitlab.com/ce/ci/docker/using_docker_images.html#what-is-a-service
+services:
+  - postgres:latest
+
+variables:
+  POSTGRES_DB: postgres
+
+# This folder is cached between builds
+# http://docs.gitlab.com/ce/ci/yaml/README.html#cache
+cache:
+  paths:
+  - ~/.cache/pip/
+
+# This is a basic example for a gem or script which doesn't use
+# services such as redis or postgres. 
+before_script:
+  - python -V
+  - cd backend && pip install -r requirements.txt
+
+test:
+  variables:
+    DATABASE_URL: "postgresql://postgres:postgres@postgres:5432/$POSTGRES_DB"
+  script:
+  - python manage.py test --settings backend.ci
+```
+
+This `gitlab-ci.yml` file will run all of the tests for our Django application. 
+
+We specify a base image `python:3.6`, and then we define other `services` that we want to use in our test. These services are base images for Docker containers, such as `postgres:latest`.
+
+The `before_script` let's us do setup for our tests. We provide a list of commands to run before running the test. Here, we: 
+
+- Print out the version of python to verify that it is correct
+- Change directories to backend and install requirements
+
+Next, in the `test` section, we provide a list of commands that will run one or more tests. Here we simply run `python manage.py test --settings backend.ci`. This runs our tests, but it uses a settings file called `ci.pi` with the following location: `backend/backend/ci.pi`. Let's look at how this file will differ from `settings.py`.
+
+The major difference is in `DATABASES`:
+
+**settings.py**
+
+```python
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'postgres',
+        'USER': 'postgres',
+        'HOST': 'db',
+        'PORT': 5432,
+    }
+}
+```
+
+**ci.py**
+
+```python
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql_psycopg2',
+        'NAME': 'ci',
+        'USER': 'postgres',
+        'PASSWORD': 'postgres',
+        'HOST': 'postgres',
+        'PORT': '5432',
+    },
+}
+```
+
+Let's commit these changes in a new branch from `develop` called `ci`:
+
+```bash
+$ git checkout -b ci develop
+$ git add .
+$ commit commit -m "added gitlab-ci.yml for CI and added documentation"
+$ git checkout develop
+$ git merge ci
+```
+
+Now let's prepare a new minor release that we branch from `develop`, merge it to `master`, tag it and push it.
+
+```bash
+$ git checkout -b release-1.2 develop
+$ git checkout master
+$ git merge --no-ff release-1.2
+$ git tag -a 1.2
+$ git push
+$ git push --tags
+```
+
+**Note**: If you are pushing code to GitLab and don't want GitLab CI to run tests (if you are only making changes to `documentation` or `README.md`, for example) you can add `[skpi ci] to the end of the commit message.
+
+Now let's check the status of our build on GitLab. 
