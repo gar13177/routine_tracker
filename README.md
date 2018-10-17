@@ -2347,3 +2347,44 @@ $ git push --tags
 **Note**: If you are pushing code to GitLab and don't want GitLab CI to run tests (if you are only making changes to `documentation` or `README.md`, for example) you can add `[skpi ci] to the end of the commit message.
 
 Now let's check the status of our build on GitLab. 
+
+We see that our test failed. If we look at the results of the test, we exactly what happened:
+
+```
+$ python manage.py test --settings backend.ci
+.F.
+======================================================================
+FAIL: test_get_posts (posts.tests.TestPosts)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/builds/bcaffey/portal/backend/posts/tests.py", line 21, in test_get_posts
+    self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+AssertionError: 200 != 401
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.372s
+
+FAILED (failures=1)
+Creating test database for alias 'default'...
+System check identified no issues (0 silenced).
+eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoxLCJ1c2VybmFtZSI6InVzZXIiLCJleHAiOjE1Mzk4MDQyMjksImVtYWlsIjoidXNlckBmb28uY29tIn0.rsl-SgNdeKQsZblRpitq7RL5GGx7Aft8YBi7TIB56cw
+Destroying test database for alias 'default'...
+ERROR: Job failed: exit code 1
+```
+
+While I was testing, I changed the `REST_FRAMEWORK` settings so that unauthenticated users would be able to access posts. Let's change the settings once again so that our tests pass:
+
+We need to uncomment `'rest_framework.permissions.IsAuthenticated',` and `'rest_framework_jwt.authentication.JSONWebTokenAuthentication',`. 
+
+```python
+REST_FRAMEWORK = {
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_jwt.authentication.JSONWebTokenAuthentication',
+        # 'rest_framework.authentication.SessionAuthentication',
+        # 'rest_framework.authentication.BasicAuthentication',
+    ),
+}
+```
