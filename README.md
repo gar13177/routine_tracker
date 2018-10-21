@@ -104,9 +104,10 @@ For more examples and ideas, visit:
 If you have used docker previously, you may want to remove any old or unused images. Do this with the following commands: 
 
 ```bash
-$ docker rmi $(docker images -f "dangling=true" -q)
 $ docker system prune
+$ docker rmi $(docker images -f "dangling=true" -q)
 $ docker rmi $(docker images -a -q)
+$ docker rm $(docker ps --filter=status=exited --filter=status=created -q)
 ```
 
 ## Git
