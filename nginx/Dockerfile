@@ -2,6 +2,7 @@
 FROM node:9.11.1-alpine as build-stage
 WORKDIR /app/
 COPY frontend/package.json /app/
+RUN npm cache verify
 RUN npm install
 COPY frontend /app/
 RUN npm run build
