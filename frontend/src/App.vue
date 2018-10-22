@@ -1,32 +1,76 @@
 <template>
   <div id="app">
-    <div id="nav">
-      <router-link to="/">Home</router-link> |
-      <router-link to="/posts">Posts</router-link> |
-      <router-link to="/about">About</router-link>
-    </div>
-    <router-view/>
+    <el-container>
+      <side-menu></side-menu>
+      <el-container>
+        <el-main>
+          <top-nav></top-nav>
+          <bread-crumbs></bread-crumbs>
+          <router-view></router-view>
+        </el-main>
+      </el-container>
+    </el-container>
   </div>
 </template>
 
+<script>
+
+import './assets/css/reset.css';
+import TopNav from './components/TopNav.vue';
+import BreadCrumbs from './components/BreadCrumbs.vue';
+import SideMenu from './components/SideMenu.vue';
+
+export default {
+  components: {
+    TopNav,
+    BreadCrumbs,
+    SideMenu,
+  },
+  data() {
+    return {
+      activeIndex: '1',
+      activeIndex2: '1',
+    };
+  },
+};
+</script>
+
 <style>
-#app {
-  font-family: 'Avenir', Helvetica, Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-align: center;
-  color: #2c3e50;
-}
-#nav {
-  padding: 30px;
+
+html {
+  font-family: "Helvetica Neue",Helvetica;
 }
 
-#nav a {
-  font-weight: bold;
-  color: #2c3e50;
+.container {
+  max-width: 1200px;
+  margin: auto;
 }
 
-#nav a.router-link-exact-active {
-  color: #42b983;
+.el-aside {
+  background: #545c64;
+  color:white;
+  min-height:100vh;
 }
+
+.logo-container {
+  padding: 22px;
+  background: #434A50;
+}
+
+header.el-header {
+  padding-left: 0px;
+  padding-right:0px;
+}
+
+.el-main {
+  padding-top:0px;
+  padding-left: 0px;
+  padding-right:0px;
+  background: #EEF1F4;
+}
+
+.el-menu {
+  border-right: 0 !important;
+}
+
 </style>
