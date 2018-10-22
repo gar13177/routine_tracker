@@ -2412,3 +2412,39 @@ To fix hot reloading for `docker-compose.dev.yml`, we need to change our `fronte
 > Take note of the volumes. Without the data volume ('/usr/src/app/node_modules'), the node_modules directory would be overwritten by the mounting of the host directory at runtime:
 
 [https://mherman.org/blog/dockerizing-a-react-app/#react-router-and-nginx](https://mherman.org/blog/dockerizing-a-react-app/#react-router-and-nginx)
+
+
+## Adding Element UI
+
+To add Element UI, we need to add the most recent version to `package.json`:
+
+```json
+  "dependencies": {
+    "element-ui":"^2.4.8",
+    ...
+  }
+```
+
+For now we will do a full import. To do this, we need to import `Element UI` in `main.js`:
+
+```javascript
+import Vue from 'vue';
+import ElementUI from 'element-ui';
+import 'element-ui/lib/theme-chalk/index.css';
+import App from './App.vue';
+import router from './router';
+import store from './store';
+import './registerServiceWorker';
+
+Vue.use(ElementUI);
+Vue.config.productionTip = false;
+
+new Vue({
+  router,
+  store,
+  render: h => h(App),
+}).$mount('#app');
+```
+
+Now we can use Element UI components anywhere in our project without importing in each file. There are reasons for why we would want to import components as you need them, and we will talk about these reasons later. 
+
