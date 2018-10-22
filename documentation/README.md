@@ -2389,3 +2389,26 @@ REST_FRAMEWORK = {
     ),
 }
 ```
+
+## Hot Reloading Fix
+
+To fix hot reloading for `docker-compose.dev.yml`, we need to change our `frontend` service to this: 
+
+```yml
+  frontend:
+    build:
+      context: ./frontend
+    volumes:
+      - './frontend:/app/:ro'
+      - '/app/node_modules'
+    ports:
+      - "8080:8080"
+    depends_on:
+      - backend
+    networks:
+      - django-nginx
+```
+
+> Take note of the volumes. Without the data volume ('/usr/src/app/node_modules'), the node_modules directory would be overwritten by the mounting of the host directory at runtime:
+
+[https://mherman.org/blog/dockerizing-a-react-app/#react-router-and-nginx](https://mherman.org/blog/dockerizing-a-react-app/#react-router-and-nginx)

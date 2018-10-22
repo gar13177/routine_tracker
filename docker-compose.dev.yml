@@ -2,11 +2,13 @@ version: '3'
 
 services:
   db:
+    container_name: db
     image: postgres
     networks:
       - django-nginx
 
   backend:
+    container_name: backend
     build: ./backend
     command: /start_dev.sh
     volumes:
@@ -18,22 +20,28 @@ services:
       - db
 
   frontend:
+    container_name: frontend
     build:
       context: ./frontend
     volumes:
-      - ./frontend:/app/frontend:ro
+      - './frontend:/app/:ro'
+      - '/app/node_modules'
+    ports:
+      - "8080:8080"
     depends_on:
       - backend
     networks:
       - django-nginx
+    environment:
+      - NODE_ENV=development
 
   nginx:
     image: nginx:alpine
+    container_name: nginx
     ports:
       - "80:80"
     depends_on:
       - backend
-      - frontend
     volumes:
       - ./nginx/dev.conf:/etc/nginx/nginx.conf:ro
       - django-static:/usr/src/app/static
