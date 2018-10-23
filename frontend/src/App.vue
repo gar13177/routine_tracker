@@ -6,7 +6,8 @@
         <el-main>
           <top-nav></top-nav>
           <bread-crumbs></bread-crumbs>
-          <router-view></router-view>
+          <el-container></el-container>
+            <router-view></router-view>
         </el-main>
       </el-container>
     </el-container>
@@ -28,8 +29,8 @@ export default {
   },
   data() {
     return {
-      activeIndex: '1',
-      activeIndex2: '1',
+      // activeIndex: '1',
+      // activeIndex2: '1',
     };
   },
 };
