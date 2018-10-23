@@ -21,17 +21,24 @@
             <el-menu-item index="2-4-3">item three</el-menu-item>
             </el-submenu>
         </el-submenu>
+        <el-menu-item index="5" class="right">Logout</el-menu-item>
+        <el-menu-item index="4" class="right">Documnetation</el-menu-item>
+        <el-menu-item index="3" class="right">Settings</el-menu-item>
         </el-menu>
     </el-header>
 </template>
 
 <style scoped>
+.right {
+  float: right;
+}
+
 header.el-header {
   padding-left: 0px;
-  padding-right:0px;
+  padding-right: 0px;
 }
 html {
-  font-family: "Helvetica Neue",Helvetica;
+  font-family: "Helvetica Neue", Helvetica;
 }
 
 .container {
@@ -41,24 +48,24 @@ html {
 
 .el-aside {
   background: #545c64;
-  color:white;
-  min-height:100vh;
+  color: white;
+  min-height: 100vh;
 }
 
 .logo-container {
   padding: 22px;
-  background: #434A50;
+  background: #434a50;
 }
 
 header.el-header {
   padding-left: 0px;
-  padding-right:0px;
+  padding-right: 0px;
 }
 
 .el-main {
-  padding-top:0px;
+  padding-top: 0px;
   padding-left: 0px;
-  padding-right:0px;
+  padding-right: 0px;
 }
 
 .el-menu {

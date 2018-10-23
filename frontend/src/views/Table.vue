@@ -72,7 +72,12 @@
       };
     },
     mounted: function() {
-      this.$message('This is a table.');
+      const h = this.$createElement;
+      this.$notify({
+          title: '2018 Financials',
+          message: h('i', { style: 'color: teal;' }, 'Table loaded successfully'),
+          offset: 50,
+        });
     },
     methods: {
       getSummaries(param) {
