@@ -66,11 +66,6 @@ services:
     networks:
       - django-nginx
 
-  celery-beat:
-    build: ./backend
-    container_name: celery_beat
-    command: bash
-
   portainer:
     image: portainer/portainer
     container_name: portainer
