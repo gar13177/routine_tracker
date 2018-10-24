@@ -48,8 +48,41 @@ services:
     networks:
       - django-nginx
 
+  redis:
+    image: redis:alpine
+    container_name: redis
+    networks:
+      - django-nginx
+
+  celery:
+    build: ./backend
+    container_name: celery
+    command: bash -c 'celery worker --app=backend.celery_app:app --loglevel=info'
+    volumes:
+      - ./backend:/code
+    depends_on:
+      - db
+      - redis
+    networks:
+      - django-nginx
+
+  celery-beat:
+    build: ./backend
+    container_name: celery_beat
+    command: bash
+
+  portainer:
+    image: portainer/portainer
+    container_name: portainer
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer-data:/data
+    ports:
+      - 9000:9000
+
 volumes:
   django-static:
+  portainer-data:
 
 networks:
   django-nginx:
