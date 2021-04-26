@@ -3,12 +3,14 @@ import ElementUI from 'element-ui';
 import 'element-ui/lib/theme-chalk/index.css';
 import locale from 'element-ui/lib/locale/lang/en';
 import App from './App.vue';
-import router from './router';
+import { router } from './router';
 import store from './store';
 import './registerServiceWorker';
+import VeeValidate from 'vee-validate';
 
 Vue.use(ElementUI, { locale });
 Vue.config.productionTip = false;
+Vue.use(VeeValidate);
 
 new Vue({
   router,

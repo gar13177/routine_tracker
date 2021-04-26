@@ -3,17 +3,33 @@ import Router from 'vue-router';
 import Home from './views/Home.vue';
 import Table from './views/Table.vue';
 import DockerCompose from './views/DockerCompose';
+import Login from './views/Login.vue';
+import Register from './views/Register.vue';
 
 Vue.use(Router);
 
-export default new Router({
+export const router = new Router({
   mode: 'history',
-  base: process.env.BASE_URL,
+  // base: process.env.BASE_URL,
   routes: [
     {
       path: '/',
       name: 'home',
       component: Home,
+    },
+    {
+      path: '/login',
+      component: Login
+    },
+    {
+      path: '/register',
+      component: Register
+    },
+    {
+      path: '/profile',
+      name: 'profile',
+      // lazy-loaded
+      component: () => import('./views/Profile.vue')
     },
     {
       path: '/docker-compose',
@@ -47,4 +63,18 @@ export default new Router({
       component: () => import(/* webpackChunkName: "about" */ './views/About.vue'),
     },
   ],
+});
+
+router.beforeEach((to, from, next) => {
+  const publicPages = ['/login', '/register', '/home'];
+  const authRequired = !publicPages.includes(to.path);
+  const loggedIn = localStorage.getItem('user');
+
+  // trying to access a restricted page + not logged in
+  // redirect to login page
+  if (authRequired && !loggedIn) {
+    next('/login');
+  } else {
+    next();
+  }
 });

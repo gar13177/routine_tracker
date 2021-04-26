@@ -21,6 +21,6 @@ admin.site.site_header = 'Admin Login'
 urlpatterns = [
     path('api/', include('posts.urls')),
     path('api/tracker/', include('tracker.urls')),
-    path('', include('accounts.urls')),
+    path('api/', include('accounts.urls')),
     path('admin/', admin.site.urls),
 ]
