@@ -6,6 +6,10 @@ services:
     image: postgres
     networks:
       - django-nginx
+    environment:
+      - POSTGRES_DB=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
 
   backend:
     container_name: backend
@@ -18,6 +22,8 @@ services:
       - django-nginx
     depends_on:
       - db
+    ports:
+      - "8000:8000"
 
   frontend:
     container_name: frontend
